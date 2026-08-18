@@ -40,7 +40,7 @@ workflow SVEvidenceExtraction {
     # build_tables-mode input
     File? regions_tsv
 
-    String docker = "us-central1-docker.pkg.dev/PROJECT_ID/sv-evidence-extraction/sv-evidence-extraction:latest"
+    String docker = "us.gcr.io/talkowski-sv-gnomad/dam/sv-evidence-extraction:latest"
     Int disk_gb = 20
     Int mem_gb = 8
   }

@@ -1,8 +1,14 @@
 # Starting point for the sv_evidence_extraction WDL task's runtime image.
-# Build from this repo's root, e.g.:
-#   docker build -t us-central1-docker.pkg.dev/PROJECT_ID/sv-evidence-extraction/sv-evidence-extraction:latest .
-#   docker push us-central1-docker.pkg.dev/PROJECT_ID/sv-evidence-extraction/sv-evidence-extraction:latest
-# then point the WDL's `docker` input at the pushed image.
+# Build and push from this repo's root via Cloud Build (no local Docker
+# daemon required) -- this is the actual command used for the image the
+# WDL currently defaults to:
+#   gcloud builds submit \
+#     --project=talkowski-sv-gnomad \
+#     --tag us.gcr.io/talkowski-sv-gnomad/dam/sv-evidence-extraction:latest \
+#     .
+# Swap the project/path for your own if you're maintaining a fork --
+# "dam" here is just the pushing user's initials, used as a namespacing
+# folder within the shared talkowski-sv-gnomad registry.
 #
 # pysam's PyPI wheel already bundles an htslib built with GCS/libcurl
 # support -- confirmed working against a public gs:// tabix file with no
