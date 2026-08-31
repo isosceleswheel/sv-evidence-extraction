@@ -28,6 +28,7 @@ Design notes
   depth signal across the whole event -- so `pad_window()` is used for it
   instead.
 """
+import os
 import sys
 from dataclasses import dataclass, field
 
@@ -42,6 +43,32 @@ except ImportError:  # pragma: no cover - exercised only where pysam truly isn't
     _HAVE_PYSAM = False
 
 import subprocess
+
+
+def _refresh_gcs_oauth_token():
+    """Set GCS_OAUTH_TOKEN to a fresh access token, for htslib's GCS backend.
+
+    htslib's built-in GCS support (used by both pysam and the `tabix` CLI)
+    does not discover Application Default Credentials on its own the way
+    Python's google-auth/google-cloud-storage libraries do -- confirmed by
+    hand against a real private bucket, where pysam.TabixFile() failed to
+    open a file the same ADC credentials could read fine via
+    google.cloud.storage. It only works if GCS_OAUTH_TOKEN is set
+    explicitly, so this shells out to `gcloud auth print-access-token`
+    (matching the token-minting approach already proven in the original
+    analysis notebook this tool replaced) before every new file is opened.
+    """
+    result = subprocess.run(
+        ["gcloud", "auth", "print-access-token"], capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"WARNING: could not obtain a GCS access token ({result.stderr.strip()}); "
+            "access to private gs:// evidence files will likely fail.",
+            file=sys.stderr,
+        )
+        return
+    os.environ["GCS_OAUTH_TOKEN"] = result.stdout.strip()
 
 
 # ======================================================================
@@ -194,9 +221,12 @@ class TabixSource:
     Wraps `pysam.TabixFile` when it can open the URL directly (opened
     once, then reused for many `.fetch()` calls against different
     regions -- this is what makes batch queries across many regions
-    cheap). Falls back to shelling out to the `tabix` CLI per-query if
-    pysam/htslib can't open the URL (e.g. no GCS support compiled in),
-    so the tool still works, just at the notebook's original speed.
+    cheap). Before opening a gs:// URL, refreshes GCS_OAUTH_TOKEN, since
+    htslib's GCS backend needs it explicitly rather than discovering
+    Application Default Credentials on its own. Falls back to shelling
+    out to the `tabix` CLI per-query if pysam/htslib still can't open
+    the URL, so the tool still works, just at the notebook's original
+    speed.
     """
 
     def __init__(self, url):
@@ -206,6 +236,9 @@ class TabixSource:
         self._open()
 
     def _open(self):
+        if self.url.startswith("gs://"):
+            _refresh_gcs_oauth_token()
+
         if _HAVE_PYSAM:
             try:
                 self._handle = pysam.TabixFile(self.url)

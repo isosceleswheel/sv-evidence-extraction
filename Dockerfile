@@ -10,16 +10,18 @@
 # "dam" here is just the pushing user's initials, used as a namespacing
 # folder within the shared talkowski-sv-gnomad registry.
 #
-# pysam's PyPI wheel already bundles an htslib built with GCS/libcurl
-# support -- confirmed working against a public gs:// tabix file with no
-# extra setup -- so no gcloud SDK or manual GCS_OAUTH_TOKEN plumbing is
-# needed for the primary access path. gcloud is still installed as the
-# fallback path's dependency, in case a given runtime's htslib build
-# ever lacks GCS support.
+# pysam's PyPI wheel bundles an htslib built with GCS/libcurl support,
+# but htslib's GCS backend does NOT discover Application Default
+# Credentials on its own -- confirmed by hand against a real private
+# bucket, where pysam.TabixFile() failed until GCS_OAUTH_TOKEN was set
+# explicitly. sv_evidence_extraction.core refreshes that env var via
+# `gcloud auth print-access-token` before opening each gs:// file, so
+# both gcloud AND the `tabix` CLI (the fallback if pysam still can't
+# open a file) need to actually be present in this image.
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl gnupg ca-certificates \
+        curl gnupg ca-certificates tabix \
     && curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/opt \
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
