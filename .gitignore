@@ -6,3 +6,12 @@ __pycache__/
 *.parquet
 .venv/
 venv/
+.ipynb_checkpoints/
+
+# Real workspace-specific paths (bucket IDs, cohort filenames) -- never
+# commit this; local_config.example.json shows the expected shape.
+local_config.json
+
+# Generated, ready-to-submit input JSONs contain real GCS paths/sample
+# IDs -- local scratch output only.
+notebooks/generated/
