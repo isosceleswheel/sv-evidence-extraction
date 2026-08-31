@@ -4,5 +4,6 @@
   "ped_file_uri": "TBD",
   "workspace_bucket": "TBD",
   "upload_prefix": "uploads/SV_evidence_extraction",
-  "gcp_billing_project": "TBD"
+  "gcp_billing_project": "TBD",
+  "local_evidence_dir": "TBD"
 }
