@@ -18,6 +18,13 @@
 # `gcloud auth print-access-token` before opening each gs:// file, so
 # both gcloud AND the `tabix` CLI (the fallback if pysam still can't
 # open a file) need to actually be present in this image.
+#
+# median_cov is a plain (non-tabix-indexed) file read straight from its
+# gs:// URI via pandas, not via pysam/htslib -- that path goes through
+# pandas' own fsspec/gcsfs backend instead, which DOES pick up
+# Application Default Credentials automatically (including a GCE VM's
+# attached service account), so it needs no equivalent token dance --
+# just the gcsfs package actually installed.
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
 
-RUN pip install --no-cache-dir pysam pandas pyarrow
+RUN pip install --no-cache-dir pysam pandas pyarrow gcsfs
 
 COPY sv_evidence_extraction/ /opt/sv_evidence_extraction/
 ENV PYTHONPATH="/opt:${PYTHONPATH}"
