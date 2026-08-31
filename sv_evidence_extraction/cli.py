@@ -21,6 +21,7 @@ Example
     python -m sv_evidence_extraction.cli query \\
         --evidence-paths-tsv evidence_paths.tsv \\
         --sample-batch-map-tsv sample_batch_map.tsv \\
+        --ped-file pedigree.ped \\
         --region chr1:161016017-161022143 \\
         --sample-ids sample_child,sample_father \\
         --out-prefix results/chr1_161016017
@@ -36,6 +37,7 @@ import sys
 
 from .core import RegionRequest, build_evidence_tables, load_regions_table
 from .io_utils import load_evidence_index, write_evidence_tables
+from .pedigree import load_pedigree
 
 
 def _add_common_args(parser):
@@ -47,6 +49,12 @@ def _add_common_args(parser):
     parser.add_argument(
         "--sample-batch-map-tsv", required=True,
         help="Two-column (batch_id, sample_id) sample->batch map, no header.",
+    )
+    parser.add_argument(
+        "--ped-file", default=None,
+        help="Optional 6-column PED file. When given, adds a \"relationship\" "
+             "(child/father/mother/unknown) column to every output table, labeled "
+             "per region from that region's own sample_ids.",
     )
     parser.add_argument(
         "--out-prefix", required=True,
@@ -70,9 +78,11 @@ def _add_common_args(parser):
 
 def _run(regions, args):
     evidence_index = load_evidence_index(args.evidence_paths_tsv, args.sample_batch_map_tsv)
+    df_ped = load_pedigree(args.ped_file) if args.ped_file else None
     tables = build_evidence_tables(
         regions, evidence_index,
         pad_pct=args.pad_pct, pad_floor=args.pad_floor, pad_ceiling=args.pad_ceiling_pe_sr,
+        df_ped=df_ped,
     )
     written = write_evidence_tables(tables, args.out_prefix)
     for evidence_class, paths in written.items():

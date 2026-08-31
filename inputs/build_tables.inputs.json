@@ -2,6 +2,7 @@
   "SVEvidenceExtraction.mode": "build_tables",
   "SVEvidenceExtraction.evidence_paths_tsv": "TBD",
   "SVEvidenceExtraction.sample_batch_map_tsv": "TBD",
+  "SVEvidenceExtraction.ped_file": "TBD",
   "SVEvidenceExtraction.regions_tsv": "TBD",
   "SVEvidenceExtraction.output_prefix": "TBD",
   "SVEvidenceExtraction.pad_pct": 0.30,

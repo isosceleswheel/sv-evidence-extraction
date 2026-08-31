@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from .pedigree import label_family_roles, add_relationship_column
+
 try:
     import pysam
     _HAVE_PYSAM = True
@@ -519,7 +521,13 @@ def load_regions_table(path):
     return requests
 
 
-def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000, pad_ceiling=5000):
+def _insert_after(columns, after, new_col):
+    """Return `columns` with `new_col` inserted right after the `after` entry."""
+    idx = columns.index(after) + 1
+    return columns[:idx] + [new_col] + columns[idx:]
+
+
+def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000, pad_ceiling=5000, df_ped=None):
     """Extract PE, SR, and RD evidence for every region request.
 
     Samples in each region are grouped by batch so a batch's PE/SR/RD
@@ -533,6 +541,14 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
     regions : list of RegionRequest
     evidence_index : EvidenceIndex
     pad_pct, pad_floor, pad_ceiling : see `pad_window` / `breakpoint_windows`.
+    df_ped : pandas.DataFrame, optional
+        As returned by `pedigree.load_pedigree`. If given, a
+        "relationship" column (child/father/mother/unknown) is added to
+        every output table, labeled from `region.sample_ids` -- scoped
+        to *each region's own family group*, not the run's full sample
+        set, since a build-tables run can touch many unrelated families
+        and a sample's role can differ by context. If omitted, no
+        relationship column is added.
 
     Returns
     -------
@@ -553,6 +569,8 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
             rd_start, rd_end = pad_window(region.start, region.end, pad_pct, pad_floor)
             rd_window = (region.chrom, rd_start, rd_end)
 
+            role_map = label_family_roles(region.sample_ids, df_ped) if df_ped is not None else None
+
             batches = evidence_index.group_by_batch(region.sample_ids)
             for batch_id, batch_samples in batches.items():
                 pe_url = evidence_index.pe_url.get(batch_id)
@@ -563,25 +581,35 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
                 if pe_url:
                     df_pe = extract_pe(handle_cache, pe_url, pe_sr_windows, batch_samples)
                     if not df_pe.empty:
+                        if role_map is not None:
+                            df_pe = add_relationship_column(df_pe, role_map)
                         df_pe.insert(0, "name", region.name)
                         pe_frames.append(df_pe)
 
                 if sr_url:
                     df_sr = extract_sr(handle_cache, sr_url, pe_sr_windows, batch_samples)
                     if not df_sr.empty:
+                        if role_map is not None:
+                            df_sr = add_relationship_column(df_sr, role_map)
                         df_sr.insert(0, "name", region.name)
                         sr_frames.append(df_sr)
 
                 if rd_url:
                     df_rd = extract_rd(handle_cache, rd_url, rd_window, batch_samples, cov_url=cov_url, cov_cache=cov_cache)
                     if not df_rd.empty:
+                        if role_map is not None:
+                            df_rd = add_relationship_column(df_rd, role_map)
                         df_rd.insert(0, "name", region.name)
                         rd_frames.append(df_rd)
     finally:
         handle_cache.close_all()
 
+    pe_columns = _insert_after(PE_COLUMNS, "sample_id", "relationship") if df_ped is not None else PE_COLUMNS
+    sr_columns = _insert_after(SR_COLUMNS, "sample_id", "relationship") if df_ped is not None else SR_COLUMNS
+    rd_columns = _insert_after(RD_COLUMNS, "sample_id", "relationship") if df_ped is not None else RD_COLUMNS
+
     return {
-        "pe": pd.concat(pe_frames, ignore_index=True) if pe_frames else pd.DataFrame(columns=["name"] + PE_COLUMNS),
-        "sr": pd.concat(sr_frames, ignore_index=True) if sr_frames else pd.DataFrame(columns=["name"] + SR_COLUMNS),
-        "rd": pd.concat(rd_frames, ignore_index=True) if rd_frames else pd.DataFrame(columns=["name"] + RD_COLUMNS),
+        "pe": pd.concat(pe_frames, ignore_index=True) if pe_frames else pd.DataFrame(columns=["name"] + pe_columns),
+        "sr": pd.concat(sr_frames, ignore_index=True) if sr_frames else pd.DataFrame(columns=["name"] + sr_columns),
+        "rd": pd.concat(rd_frames, ignore_index=True) if rd_frames else pd.DataFrame(columns=["name"] + rd_columns),
     }

@@ -28,6 +28,14 @@ workflow SVEvidenceExtraction {
     File sample_batch_map_tsv
     String output_prefix
 
+    # Optional 6-column PED file. When given, adds a "relationship"
+    # (child/father/mother/unknown) column to every output table. Unlike
+    # evidence_paths_tsv's embedded gs:// URIs, this IS a normal Cromwell-
+    # localized File input -- it's read wholesale (not randomly accessed
+    # via tabix), and small enough (a few MB for a large cohort) that
+    # localizing it costs nothing.
+    File? ped_file
+
     Float pad_pct = 0.30
     Int pad_floor = 1000
     Int pad_ceiling_pe_sr = 5000
@@ -50,6 +58,7 @@ workflow SVEvidenceExtraction {
       input:
         evidence_paths_tsv    = evidence_paths_tsv,
         sample_batch_map_tsv  = sample_batch_map_tsv,
+        ped_file              = ped_file,
         region                = select_first([region]),
         sample_ids            = select_first([sample_ids]),
         region_name           = region_name,
@@ -68,6 +77,7 @@ workflow SVEvidenceExtraction {
       input:
         evidence_paths_tsv    = evidence_paths_tsv,
         sample_batch_map_tsv  = sample_batch_map_tsv,
+        ped_file              = ped_file,
         regions_tsv           = select_first([regions_tsv]),
         output_prefix         = output_prefix,
         pad_pct               = pad_pct,
@@ -93,6 +103,7 @@ task QueryEvidence {
   input {
     File evidence_paths_tsv
     File sample_batch_map_tsv
+    File? ped_file
     String region
     String sample_ids
     String? region_name
@@ -110,6 +121,7 @@ task QueryEvidence {
     python3 -m sv_evidence_extraction.cli query \
       --evidence-paths-tsv ~{evidence_paths_tsv} \
       --sample-batch-map-tsv ~{sample_batch_map_tsv} \
+      ~{"--ped-file " + ped_file} \
       --region ~{region} \
       --sample-ids ~{sample_ids} \
       ~{"--name " + region_name} \
@@ -140,6 +152,7 @@ task BuildEvidenceTables {
   input {
     File evidence_paths_tsv
     File sample_batch_map_tsv
+    File? ped_file
     File regions_tsv
     String output_prefix
     Float pad_pct
@@ -155,6 +168,7 @@ task BuildEvidenceTables {
     python3 -m sv_evidence_extraction.cli build-tables \
       --evidence-paths-tsv ~{evidence_paths_tsv} \
       --sample-batch-map-tsv ~{sample_batch_map_tsv} \
+      ~{"--ped-file " + ped_file} \
       --regions-tsv ~{regions_tsv} \
       --pad-pct ~{pad_pct} \
       --pad-floor ~{pad_floor} \
