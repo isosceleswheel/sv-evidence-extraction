@@ -1,0 +1,15 @@
+{
+  "SVEvidenceExtraction.mode": "query",
+  "SVEvidenceExtraction.evidence_paths_tsv": "TBD",
+  "SVEvidenceExtraction.sample_batch_map_tsv": "TBD",
+  "SVEvidenceExtraction.region": "TBD",
+  "SVEvidenceExtraction.sample_ids": "TBD",
+  "SVEvidenceExtraction.region_name": "TBD",
+  "SVEvidenceExtraction.output_prefix": "TBD",
+  "SVEvidenceExtraction.pad_pct": 0.30,
+  "SVEvidenceExtraction.pad_floor": 1000,
+  "SVEvidenceExtraction.pad_ceiling_pe_sr": 5000,
+  "SVEvidenceExtraction.docker": "us.gcr.io/talkowski-sv-gnomad/dam/sv-evidence-extraction:latest",
+  "SVEvidenceExtraction.disk_gb": 20,
+  "SVEvidenceExtraction.mem_gb": 8
+}
