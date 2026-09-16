@@ -19,14 +19,14 @@ Design notes
   handshake). `TabixHandleCache` keeps one open handle per URL for the
   life of a whole run, so a batch file touched by many regions across a
   build-tables run is only opened once total, not once per region.
-- PE/SR support a variant's two breakpoints, not its interior. Padding
-  the *entire* span of a multi-Mb SV would pull a large amount of
-  irrelevant evidence from the middle and cost a much bigger tabix scan
-  for no benefit, so `breakpoint_windows()` returns small windows around
-  each breakpoint (merged into one if the event is small enough that
-  they'd overlap). RD genuinely needs the full padded span -- that's the
-  depth signal across the whole event -- so `pad_window()` is used for it
-  instead.
+- At this extraction stage, PE, SR, and RD are all queried over the same
+  `pad_window()`-padded span of the requested region. The region's
+  start/end aren't confirmed breakpoints yet -- discovering them is the
+  point of extracting this evidence -- so constraining PE/SR to narrow
+  windows around the region's start and end would presuppose the answer.
+  `breakpoint_windows()` is kept around for a later, more targeted
+  extraction pass once breakpoints have actually been resolved from a
+  first round of full-region evidence.
 """
 import os
 import sys
@@ -340,8 +340,8 @@ def extract_pe(handle_cache, url, windows, sample_ids):
     url : str
         URI of this batch's merged_PE file.
     windows : list of (chrom, start, end)
-        One or two windows to query -- typically the output of
-        `breakpoint_windows()`.
+        One or two windows to query -- typically a single padded window
+        from `pad_window()`.
     sample_ids : list of str
         Only rows whose sample_id is in this set are kept (the file
         contains every sample in the batch).
@@ -540,7 +540,12 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
     ----------
     regions : list of RegionRequest
     evidence_index : EvidenceIndex
-    pad_pct, pad_floor, pad_ceiling : see `pad_window` / `breakpoint_windows`.
+    pad_pct, pad_floor : see `pad_window`. Used to compute one padded
+        window per region, queried for all three of PE, SR, and RD.
+    pad_ceiling : int, default 5000
+        Unused at this extraction stage (kept for CLI/WDL input
+        compatibility and for a future breakpoint-focused re-extraction
+        pass -- see `breakpoint_windows`).
     df_ped : pandas.DataFrame, optional
         As returned by `pedigree.load_pedigree`. If given, a
         "relationship" column (child/father/mother/unknown) is added to
@@ -562,12 +567,17 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
 
     try:
         for region in regions:
-            pe_sr_windows = [
-                (region.chrom, w_start, w_end)
-                for w_start, w_end in breakpoint_windows(region.start, region.end, pad_pct, pad_floor, pad_ceiling)
-            ]
-            rd_start, rd_end = pad_window(region.start, region.end, pad_pct, pad_floor)
-            rd_window = (region.chrom, rd_start, rd_end)
+            # Query PE/SR/RD all over the same padded span of the region
+            # itself, rather than narrow windows around the region's start
+            # and end. At this extraction stage the region's start/end are
+            # not yet-confirmed breakpoints -- they're what we're trying to
+            # resolve from the evidence -- so constraining PE/SR to windows
+            # around them would beg the question. `breakpoint_windows()` is
+            # kept above for a later, more targeted extraction pass once
+            # breakpoints are known.
+            pad_start, pad_end = pad_window(region.start, region.end, pad_pct, pad_floor)
+            pe_sr_windows = [(region.chrom, pad_start, pad_end)]
+            rd_window = (region.chrom, pad_start, pad_end)
 
             role_map = label_family_roles(region.sample_ids, df_ped) if df_ped is not None else None
 
