@@ -27,8 +27,15 @@
 # just the gcsfs package actually installed.
 FROM python:3.11-slim
 
+# `apt-get install curl` pulls in libcurl4 as an automatic dependency, so
+# purging curl afterward and autoremoving would otherwise sweep libcurl4
+# away too -- and pysam's bundled htslib (and the system `tabix` binary)
+# both dlopen libcurl.so.4 at runtime for gs:// access, so losing it makes
+# every gs:// open fail with "Protocol not supported". `apt-mark manual`
+# it before the purge so autoremove leaves it alone.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl gnupg ca-certificates tabix \
+        curl gnupg ca-certificates tabix libcurl4 \
+    && apt-mark manual libcurl4 \
     && curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/opt \
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
