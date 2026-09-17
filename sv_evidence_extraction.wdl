@@ -1,24 +1,29 @@
 version 1.0
 
-## Extract PE, SR, and RD structural-variant evidence from GATK-SV batch
-## evidence files (merged_PE / merged_SR / merged_bincov / median_cov).
+## Extract PE, SR, RD, and depth-CNV (DEL/DUP) structural-variant evidence
+## from GATK-SV batch evidence files (merged_PE / merged_SR / merged_bincov
+## / median_cov / merged_dels / merged_dups).
 ##
 ## Both modes below share one Python CLI (sv_evidence_extraction.cli):
 ##   - "query": one ad hoc region + one or more samples -- a spot check.
 ##   - "build_tables": a regions TSV with many independently-scoped rows
 ##     (each naming its own sample_id(s)) -- the efficient bulk path for
-##     populating a sample_set row's PE/SR/RD evidence-table attributes.
+##     populating a sample_set row's PE/SR/RD/DEL/DUP evidence-table
+##     attributes.
 ##
 ## IMPORTANT: evidence_paths_tsv and sample_batch_map_tsv are the only
 ## WDL File inputs Cromwell localizes. The merged_PE/merged_SR/merged_bincov
-## /median_cov URIs *inside* evidence_paths_tsv are plain gs:// strings
-## read directly by pysam/htslib at runtime -- they are deliberately NOT
-## declared as File inputs, since they're large per-batch files meant to
-## be randomly accessed via tabix, not downloaded wholesale. This means
-## the container needs live GCS access at runtime; on a Terra/Cromwell
-## GCE worker this comes for free from the VM's attached service account
-## (confirmed: htslib's built-in GCS backend handles this with no
-## GCS_OAUTH_TOKEN/subprocess workaround required).
+## /median_cov/merged_dels/merged_dups URIs *inside* evidence_paths_tsv are
+## plain gs:// strings read directly at runtime -- pysam/htslib for the
+## tabix-indexed PE/SR/RD files, plain pandas (via gcsfs) for the much
+## smaller, non-indexed merged_dels/merged_dups bed files -- rather than
+## declared as File inputs, since Cromwell would otherwise try to download
+## the huge per-batch PE/SR files wholesale instead of letting them be
+## randomly accessed via tabix. This means the container needs live GCS
+## access at runtime; on a Terra/Cromwell GCE worker this comes for free
+## from the VM's attached service account (confirmed: htslib's built-in
+## GCS backend handles this with no GCS_OAUTH_TOKEN/subprocess workaround
+## required).
 
 workflow SVEvidenceExtraction {
   input {
@@ -96,6 +101,10 @@ workflow SVEvidenceExtraction {
     File? sr_parquet  = select_first([QueryEvidence.sr_parquet, BuildEvidenceTables.sr_parquet])
     File? rd_tsv      = select_first([QueryEvidence.rd_tsv, BuildEvidenceTables.rd_tsv])
     File? rd_parquet  = select_first([QueryEvidence.rd_parquet, BuildEvidenceTables.rd_parquet])
+    File? del_tsv     = select_first([QueryEvidence.del_tsv, BuildEvidenceTables.del_tsv])
+    File? del_parquet = select_first([QueryEvidence.del_parquet, BuildEvidenceTables.del_parquet])
+    File? dup_tsv     = select_first([QueryEvidence.dup_tsv, BuildEvidenceTables.dup_tsv])
+    File? dup_parquet = select_first([QueryEvidence.dup_parquet, BuildEvidenceTables.dup_parquet])
   }
 }
 
@@ -138,6 +147,10 @@ task QueryEvidence {
     File sr_parquet = "~{output_prefix}.sr.parquet"
     File rd_tsv     = "~{output_prefix}.rd.tsv"
     File rd_parquet = "~{output_prefix}.rd.parquet"
+    File del_tsv     = "~{output_prefix}.del.tsv"
+    File del_parquet = "~{output_prefix}.del.parquet"
+    File dup_tsv     = "~{output_prefix}.dup.tsv"
+    File dup_parquet = "~{output_prefix}.dup.parquet"
   }
 
   runtime {
@@ -183,6 +196,10 @@ task BuildEvidenceTables {
     File sr_parquet = "~{output_prefix}.sr.parquet"
     File rd_tsv     = "~{output_prefix}.rd.tsv"
     File rd_parquet = "~{output_prefix}.rd.parquet"
+    File del_tsv     = "~{output_prefix}.del.tsv"
+    File del_parquet = "~{output_prefix}.del.parquet"
+    File dup_tsv     = "~{output_prefix}.dup.tsv"
+    File dup_parquet = "~{output_prefix}.dup.parquet"
   }
 
   runtime {

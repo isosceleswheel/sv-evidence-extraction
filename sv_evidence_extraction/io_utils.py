@@ -17,8 +17,11 @@ def load_evidence_index(evidence_paths_tsv, sample_batch_map_tsv):
     ----------
     evidence_paths_tsv : str
         Path (local or gs://) to the sample_set-level evidence-paths
-        table -- one row per batch, columns entity:sample_set_id,
-        median_cov, merged_PE, merged_SR, merged_bincov.
+        table -- one row per batch, with at least columns
+        entity:sample_set_id, median_cov, merged_PE, merged_SR,
+        merged_bincov, merged_dels, merged_dups. May be the full Terra
+        sample_set table with many other columns; anything not named
+        above is ignored.
     sample_batch_map_tsv : str
         Path to the sample -> batch map: two columns, no header
         (batch_id, sample_id).
@@ -43,7 +46,8 @@ def write_evidence_tables(tables, out_prefix):
     Parameters
     ----------
     tables : dict of str -> pandas.DataFrame
-        As returned by `core.build_evidence_tables` (keys "pe", "sr", "rd").
+        As returned by `core.build_evidence_tables` (keys "pe", "sr", "rd",
+        "del", "dup").
     out_prefix : str
         Local path prefix for output files.
 

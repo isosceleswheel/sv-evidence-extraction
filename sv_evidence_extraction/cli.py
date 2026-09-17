@@ -1,4 +1,4 @@
-"""Command-line entry point for extracting PE/SR/RD structural variant evidence.
+"""Command-line entry point for extracting PE/SR/RD/DEL/DUP structural variant evidence.
 
 Two subcommands, sharing the same underlying extraction code:
 
@@ -43,8 +43,10 @@ from .pedigree import load_pedigree
 def _add_common_args(parser):
     parser.add_argument(
         "--evidence-paths-tsv", required=True,
-        help="Terra sample_set evidence-paths table "
-             "(entity:sample_set_id, median_cov, merged_PE, merged_SR, merged_bincov).",
+        help="Terra sample_set evidence-paths table (entity:sample_set_id, "
+             "median_cov, merged_PE, merged_SR, merged_bincov, merged_dels, "
+             "merged_dups). Can be the full Terra sample_set table -- extra "
+             "columns are ignored.",
     )
     parser.add_argument(
         "--sample-batch-map-tsv", required=True,
@@ -58,7 +60,7 @@ def _add_common_args(parser):
     )
     parser.add_argument(
         "--out-prefix", required=True,
-        help="Output path prefix; writes <prefix>.{pe,sr,rd}.{tsv,parquet}.",
+        help="Output path prefix; writes <prefix>.{pe,sr,rd,del,dup}.{tsv,parquet}.",
     )
     parser.add_argument(
         "--pad-pct", type=float, default=0.30,

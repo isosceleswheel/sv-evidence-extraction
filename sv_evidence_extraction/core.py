@@ -1,4 +1,4 @@
-"""Core evidence-extraction logic for PE, SR, and RD structural variant evidence.
+"""Core evidence-extraction logic for PE, SR, RD, and depth-CNV (DEL/DUP) evidence.
 
 This module has no Terra/GCS-specific I/O in it beyond the ability to open
 a tabix-indexed file by URL (local path or gs://) -- see io_utils.py for
@@ -10,11 +10,17 @@ Design notes
 - PE and SR evidence files are per-batch (not per-sample): one bgzipped,
   tabix-indexed file holds every sample in a GATK-SV batch, with the
   sample ID as the last column. RD (bincov) files are similarly
-  per-batch, but wide-format (one column per sample). Because of this,
-  every extraction here is keyed by *batch*, not by sample: samples
-  requested for a region are grouped by batch first so a batch's file
-  is only queried once per region regardless of how many of its samples
-  are involved (e.g. a trio that rebatched together).
+  per-batch, but wide-format (one column per sample). merged_dels/
+  merged_dups (batch-level cnMOPS/gCNV depth-caller BED files) are also
+  per-batch, long-format with a sample column, but NOT tabix-indexed --
+  they're roughly 1000x smaller than a batch's PE file, small enough to
+  read wholesale with plain pandas and filter by region/sample in memory
+  (see `_load_cnv_bed`/`extract_cnv_bed`) rather than needing tabix's
+  random access. Because of this, every extraction here is keyed by
+  *batch*, not by sample: samples requested for a region are grouped by
+  batch first so a batch's file is only queried/read once per region
+  regardless of how many of its samples are involved (e.g. a trio that
+  rebatched together).
 - Opening a remote tabix file has real latency (index fetch + auth
   handshake). `TabixHandleCache` keeps one open handle per URL for the
   life of a whole run, so a batch file touched by many regions across a
@@ -158,31 +164,37 @@ class EvidenceIndex:
     ----------
     sample_to_batch : dict
         sample_id -> batch_id.
-    pe_url, sr_url, rd_url, cov_url : dict
+    pe_url, sr_url, rd_url, cov_url, del_url, dup_url : dict
         batch_id -> GCS/local URI of that batch's merged_PE, merged_SR,
-        merged_bincov, and median_cov files respectively.
+        merged_bincov, median_cov, merged_dels, and merged_dups files
+        respectively.
     """
     sample_to_batch: dict
     pe_url: dict
     sr_url: dict
     rd_url: dict
     cov_url: dict
+    del_url: dict
+    dup_url: dict
 
     @classmethod
     def from_tables(cls, df_evidence, df_batch,
                      batch_entity_col="entity:sample_set_id",
                      pe_col="merged_PE", sr_col="merged_SR",
-                     rd_col="merged_bincov", cov_col="median_cov"):
+                     rd_col="merged_bincov", cov_col="median_cov",
+                     del_col="merged_dels", dup_col="merged_dups"):
         """Build an EvidenceIndex from the evidence-paths and sample-batch-map DataFrames.
 
         Parameters
         ----------
         df_evidence : pandas.DataFrame
             One row per batch, as loaded from the Terra evidence-paths
-            table (e.g. evidence_paths.tsv).
+            table (e.g. evidence_paths.tsv). May carry many other columns
+            besides the ones named here (e.g. the full Terra sample_set
+            table) -- anything not named by `*_col` below is ignored.
         df_batch : pandas.DataFrame
             Two columns: "batch_id" and "sample_id".
-        batch_entity_col, pe_col, sr_col, rd_col, cov_col : str
+        batch_entity_col, pe_col, sr_col, rd_col, cov_col, del_col, dup_col : str
             Column names in `df_evidence`, overridable in case the Terra
             table schema drifts from the current convention.
         """
@@ -193,6 +205,8 @@ class EvidenceIndex:
             sr_url=dict(zip(df_evidence[batch_entity_col], df_evidence[sr_col])),
             rd_url=dict(zip(df_evidence[batch_entity_col], df_evidence[rd_col])),
             cov_url=dict(zip(df_evidence[batch_entity_col], df_evidence[cov_col])),
+            del_url=dict(zip(df_evidence[batch_entity_col], df_evidence[del_col])),
+            dup_url=dict(zip(df_evidence[batch_entity_col], df_evidence[dup_col])),
         )
 
     def group_by_batch(self, sample_ids):
@@ -463,6 +477,83 @@ def extract_rd(handle_cache, rd_url, window, sample_ids, cov_url=None, cov_cache
     return df_long[RD_COLUMNS]
 
 
+CNV_COLUMNS = ["chrom", "start", "end", "call_name", "sample_id", "svtype", "sources"]
+
+
+def _load_cnv_bed(url, bed_cache):
+    """Load (and cache) a batch's whole merged_dels/merged_dups BED file.
+
+    Confirmed against a real batch's files: header line `#chr start end
+    name sample svtype sources` (svtype is redundant with which of the two
+    files it is, but present regardless; sources is a comma-separated list
+    of the depth callers that produced the call, e.g. "cnmops,gcnv"). The
+    file's own "name" column (a per-call ID like "rebatch_1_DEL_1") is
+    renamed to "call_name" here, since `build_evidence_tables` inserts its
+    own leading "name" column (the region request's name) into every
+    output table -- keeping the bed file's column as "name" would collide
+    with that.
+    Unlike PE/SR/RD, these aren't tabix-indexed, but at ~1000x smaller than
+    a batch's PE file (tens of MB vs tens of GB, confirmed against a real
+    batch), reading the whole thing into memory and filtering with pandas
+    is cheap enough not to need one -- no random access required.
+
+    Parameters
+    ----------
+    url : str
+        URI of a batch's merged_dels or merged_dups file.
+    bed_cache : dict, optional
+        Cache of already-loaded per-batch DataFrames keyed by url, so a
+        batch's file is read from GCS only once per run no matter how
+        many regions touch that batch.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: CNV_COLUMNS, every call in the file (not yet filtered by
+        region or sample).
+    """
+    if bed_cache is not None and url in bed_cache:
+        return bed_cache[url]
+    df = pd.read_csv(url, sep="\t")
+    df.columns = [c.lstrip("#") for c in df.columns]
+    df = df.rename(columns={"chr": "chrom", "name": "call_name", "sample": "sample_id"})[CNV_COLUMNS]
+    if bed_cache is not None:
+        bed_cache[url] = df
+    return df
+
+
+def extract_cnv_bed(url, window, sample_ids, bed_cache=None):
+    """Extract merged_dels/merged_dups depth-CNV calls for a set of samples overlapping one window.
+
+    Parameters
+    ----------
+    url : str
+        URI of this batch's merged_dels or merged_dups file.
+    window : (chrom, start, end)
+        Region to overlap against -- typically the same padded window
+        used for PE/SR/RD (see `build_evidence_tables`).
+    sample_ids : list of str
+    bed_cache : dict, optional
+        See `_load_cnv_bed`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: CNV_COLUMNS, calls for samples in `sample_ids` whose
+        interval overlaps `window`.
+    """
+    chrom, start, end = window
+    df = _load_cnv_bed(url, bed_cache)
+    sample_set = set(sample_ids)
+    mask = (
+        (df["chrom"] == chrom)
+        & (df["start"] < end)
+        & (df["end"] > start)
+        & (df["sample_id"].isin(sample_set))
+    )
+    return df.loc[mask].reset_index(drop=True)
+
+
 # ======================================================================
 # REGION REQUESTS + TOP-LEVEL ORCHESTRATION
 # ======================================================================
@@ -528,20 +619,22 @@ def _insert_after(columns, after, new_col):
 
 
 def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000, pad_ceiling=5000, df_ped=None):
-    """Extract PE, SR, and RD evidence for every region request.
+    """Extract PE, SR, RD, and depth-CNV (DEL/DUP) evidence for every region request.
 
-    Samples in each region are grouped by batch so a batch's PE/SR/RD
-    file is queried once per region regardless of how many of its
-    samples are requested, and tabix handles are cached across the
-    *entire* run so a batch file shared by many regions is opened once
-    total.
+    Samples in each region are grouped by batch so a batch's PE/SR/RD/
+    merged_dels/merged_dups file is queried (or, for the CNV bed files,
+    read) once per region regardless of how many of its samples are
+    requested, and tabix handles/CNV bed frames are cached across the
+    *entire* run so a batch file shared by many regions is only opened
+    or read once total.
 
     Parameters
     ----------
     regions : list of RegionRequest
     evidence_index : EvidenceIndex
     pad_pct, pad_floor : see `pad_window`. Used to compute one padded
-        window per region, queried for all three of PE, SR, and RD.
+        window per region, queried for PE, SR, RD, and the DEL/DUP bed
+        files alike.
     pad_ceiling : int, default 5000
         Unused at this extraction stage (kept for CLI/WDL input
         compatibility and for a future breakpoint-focused re-extraction
@@ -558,12 +651,14 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
     Returns
     -------
     dict of str -> pandas.DataFrame
-        Keys "pe", "sr", "rd", each with a leading "name" column
-        identifying which region request the rows came from.
+        Keys "pe", "sr", "rd", "del", "dup", each with a leading "name"
+        column identifying which region request the rows came from.
     """
     handle_cache = TabixHandleCache()
     cov_cache = {}
+    bed_cache = {}
     pe_frames, sr_frames, rd_frames = [], [], []
+    del_frames, dup_frames = [], []
 
     try:
         for region in regions:
@@ -577,7 +672,7 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
             # breakpoints are known.
             pad_start, pad_end = pad_window(region.start, region.end, pad_pct, pad_floor)
             pe_sr_windows = [(region.chrom, pad_start, pad_end)]
-            rd_window = (region.chrom, pad_start, pad_end)
+            window = (region.chrom, pad_start, pad_end)
 
             role_map = label_family_roles(region.sample_ids, df_ped) if df_ped is not None else None
 
@@ -587,6 +682,8 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
                 sr_url = evidence_index.sr_url.get(batch_id)
                 rd_url = evidence_index.rd_url.get(batch_id)
                 cov_url = evidence_index.cov_url.get(batch_id)
+                del_url = evidence_index.del_url.get(batch_id)
+                dup_url = evidence_index.dup_url.get(batch_id)
 
                 if pe_url:
                     df_pe = extract_pe(handle_cache, pe_url, pe_sr_windows, batch_samples)
@@ -605,21 +702,40 @@ def build_evidence_tables(regions, evidence_index, pad_pct=0.30, pad_floor=1000,
                         sr_frames.append(df_sr)
 
                 if rd_url:
-                    df_rd = extract_rd(handle_cache, rd_url, rd_window, batch_samples, cov_url=cov_url, cov_cache=cov_cache)
+                    df_rd = extract_rd(handle_cache, rd_url, window, batch_samples, cov_url=cov_url, cov_cache=cov_cache)
                     if not df_rd.empty:
                         if role_map is not None:
                             df_rd = add_relationship_column(df_rd, role_map)
                         df_rd.insert(0, "name", region.name)
                         rd_frames.append(df_rd)
+
+                if del_url:
+                    df_del = extract_cnv_bed(del_url, window, batch_samples, bed_cache=bed_cache)
+                    if not df_del.empty:
+                        if role_map is not None:
+                            df_del = add_relationship_column(df_del, role_map)
+                        df_del.insert(0, "name", region.name)
+                        del_frames.append(df_del)
+
+                if dup_url:
+                    df_dup = extract_cnv_bed(dup_url, window, batch_samples, bed_cache=bed_cache)
+                    if not df_dup.empty:
+                        if role_map is not None:
+                            df_dup = add_relationship_column(df_dup, role_map)
+                        df_dup.insert(0, "name", region.name)
+                        dup_frames.append(df_dup)
     finally:
         handle_cache.close_all()
 
     pe_columns = _insert_after(PE_COLUMNS, "sample_id", "relationship") if df_ped is not None else PE_COLUMNS
     sr_columns = _insert_after(SR_COLUMNS, "sample_id", "relationship") if df_ped is not None else SR_COLUMNS
     rd_columns = _insert_after(RD_COLUMNS, "sample_id", "relationship") if df_ped is not None else RD_COLUMNS
+    cnv_columns = _insert_after(CNV_COLUMNS, "sample_id", "relationship") if df_ped is not None else CNV_COLUMNS
 
     return {
         "pe": pd.concat(pe_frames, ignore_index=True) if pe_frames else pd.DataFrame(columns=["name"] + pe_columns),
         "sr": pd.concat(sr_frames, ignore_index=True) if sr_frames else pd.DataFrame(columns=["name"] + sr_columns),
         "rd": pd.concat(rd_frames, ignore_index=True) if rd_frames else pd.DataFrame(columns=["name"] + rd_columns),
+        "del": pd.concat(del_frames, ignore_index=True) if del_frames else pd.DataFrame(columns=["name"] + cnv_columns),
+        "dup": pd.concat(dup_frames, ignore_index=True) if dup_frames else pd.DataFrame(columns=["name"] + cnv_columns),
     }
